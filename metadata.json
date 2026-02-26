@@ -1,0 +1,7 @@
+{
+  "name": "MedGuard AI",
+  "description": "Hệ thống quản lý tủ thuốc gia đình thông minh với AI. Quét bao bì thuốc để tự động nhận diện tên, công dụng và hạn sử dụng.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
