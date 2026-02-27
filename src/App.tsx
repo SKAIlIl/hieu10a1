@@ -7,7 +7,7 @@ import {
   Layers, Save, BookOpen, HeartPulse, MoreVertical, ChevronDown,
   MessageSquare, Send, Paperclip, Mic, MicOff, Image as ImageIcon,
   Stethoscope, AlertCircle, Zap, ZoomIn, ZoomOut, Upload, Folder,
-  Check, ListChecks, LogOut
+  Check, ListChecks, Fingerprint
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI } from "@google/genai";
@@ -192,9 +192,6 @@ export default function App() {
   // --- Auth State ---
   const [user, setUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isLoginLoading, setIsLoginLoading] = useState(false);
 
   // --- App State ---
   const [activeTab, setActiveTab] = useState<'scan' | 'inventory' | 'groups' | 'chat' | 'schedule'>('scan');
@@ -250,16 +247,36 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // --- Auth Logic ---
+  // --- Anonymous Auth Logic ---
   useEffect(() => {
     if (!supabase) {
       setAuthLoading(false);
       return;
     }
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setAuthLoading(false);
-    });
+
+    const initAnonAuth = async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error || !session) {
+          // Tự động tạo tài khoản ẩn danh nếu chưa có session
+          const { data, error: anonError } = await supabase.auth.signInAnonymously();
+          if (!anonError && data.user) {
+            setUser(data.user);
+          } else {
+            console.error("Lỗi đăng nhập ẩn danh:", anonError);
+          }
+        } else {
+          setUser(session.user);
+        }
+      } catch (err) {
+        console.error("Lỗi kiểm tra phiên đăng nhập:", err);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    initAnonAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
@@ -267,29 +284,6 @@ export default function App() {
 
     return () => subscription.unsubscribe();
   }, []);
-
-  const handleAuth = async (e: React.FormEvent, isSignUp: boolean) => {
-    e.preventDefault();
-    if (!supabase) return;
-    if (!email || !password) {
-      showToast("Vui lòng nhập Email và Mật khẩu", "warning");
-      return;
-    }
-    setIsLoginLoading(true);
-    try {
-      const { error } = isSignUp 
-        ? await supabase.auth.signUp({ email, password })
-        : await supabase.auth.signInWithPassword({ email, password });
-      
-      if (error) throw error;
-      if (isSignUp) showToast("Đăng ký thành công! Hãy kiểm tra Email (nếu yêu cầu)", "success");
-      else showToast("Đăng nhập thành công!", "success");
-    } catch (error: any) {
-      showToast(error.message, "error");
-    } finally {
-      setIsLoginLoading(false);
-    }
-  };
 
   // --- API Calls (Supabase) ---
   const fetchData = useCallback(async () => {
@@ -711,7 +705,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
   const createGroupFromSelection = async () => {
     if (!ai || !supabase || !user) {
-      showToast("Thiếu cấu hình API hoặc chưa đăng nhập", "error");
+      showToast("Thiếu cấu hình API hoặc chưa kết nối", "error");
       return;
     }
     if (selectedIds.length === 0 || !groupForm.name) return;
@@ -858,64 +852,10 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   }
 
   if (authLoading) {
-    return <div className="h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-600" /></div>;
-  }
-
-  if (!user) {
     return (
-      <div className="h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center mb-6 shadow-xl shadow-emerald-100">
-          <HeartPulse className="w-10 h-10" />
-        </div>
-        <h1 className="text-2xl font-bold text-slate-900 mb-2">MedGuard AI</h1>
-        <p className="text-slate-500 max-w-xs mb-8 text-sm">
-          Hệ thống quản lý tủ thuốc thông minh dành cho gia đình. Vui lòng đăng nhập để tiếp tục.
-        </p>
-        <div className="bg-white p-6 rounded-[32px] shadow-xl border border-slate-100 w-full max-w-sm space-y-4 text-left">
-          <div>
-            <label className="text-xs font-bold text-slate-400 uppercase ml-1">Email</label>
-            <input 
-              type="email" 
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500 mt-1"
-              placeholder="Nhập email của bạn"
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-slate-400 uppercase ml-1">Mật khẩu</label>
-            <input 
-              type="password" 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500 mt-1"
-              placeholder="Ít nhất 6 ký tự"
-            />
-          </div>
-          <div className="flex gap-3 pt-4">
-            <button 
-              onClick={(e) => handleAuth(e, true)}
-              disabled={isLoginLoading}
-              className="flex-1 bg-slate-100 text-slate-700 py-3.5 rounded-xl font-bold hover:bg-slate-200 transition-all text-sm"
-            >
-              Đăng ký
-            </button>
-            <button 
-              onClick={(e) => handleAuth(e, false)}
-              disabled={isLoginLoading}
-              className="flex-[1.5] bg-emerald-600 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex items-center justify-center text-sm"
-            >
-              {isLoginLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Đăng nhập"}
-            </button>
-          </div>
-        </div>
-        <AnimatePresence>
-        {toast && (
-          <motion.div initial={{ opacity: 0, y: 50, x: '-50%' }} animate={{ opacity: 1, y: 0, x: '-50%' }} exit={{ opacity: 0, y: 20, x: '-50%' }} className={`fixed bottom-20 left-1/2 z-[110] px-5 py-3 rounded-xl shadow-2xl font-bold text-white text-xs flex items-center gap-2 ${toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'warning' ? 'bg-amber-500' : 'bg-red-600'}`}>
-            {toast.message}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <div className="h-screen bg-slate-50 flex flex-col items-center justify-center">
+        <Loader2 className="w-10 h-10 animate-spin text-emerald-600 mb-4" />
+        <p className="font-bold text-slate-500">Đang thiết lập không gian riêng tư...</p>
       </div>
     );
   }
@@ -1051,8 +991,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
             ))}
           </nav>
           <div className="p-6 border-t border-slate-100 space-y-3">
-            <div className="flex items-center gap-2 px-2 pb-2 text-xs font-bold text-slate-400">
-              <User className="w-4 h-4" /> {user.email?.split('@')[0]}
+            <div className="flex items-center gap-2 px-2 pb-2 text-xs font-bold text-slate-400 truncate">
+              <Fingerprint className="w-4 h-4 shrink-0" /> ID: {user?.id?.substring(0, 8)}
             </div>
             <button 
               onClick={() => setShowSettings(true)} 
@@ -1065,12 +1005,6 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
               className="w-full bg-red-50 text-red-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-red-100 transition-all active:scale-[0.98] shadow-sm"
             >
               <PhoneCall className="w-5 h-5" /> SOS Khẩn cấp
-            </button>
-            <button 
-              onClick={() => supabase?.auth.signOut()} 
-              className="w-full bg-slate-50 text-slate-500 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"
-            >
-              <LogOut className="w-4 h-4" /> Đăng xuất
             </button>
           </div>
         </aside>
@@ -1085,12 +1019,12 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
             </div>
             <div>
               <h1 className="text-base font-bold tracking-tight text-slate-900 leading-none mb-0.5">MedGuard AI</h1>
-              <p className="text-[10px] text-slate-400 font-medium">{user.email?.split('@')[0]}</p>
+              <p className="text-[10px] text-slate-400 font-medium">Tài khoản ẩn danh</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowSettings(true)} className="w-10 h-10 bg-slate-50 text-slate-600 rounded-[14px] flex items-center justify-center border border-slate-100 active:scale-95 transition-all"><Settings className="w-5 h-5" /></button>
-            <button onClick={() => supabase?.auth.signOut()} className="w-10 h-10 bg-slate-50 text-slate-500 rounded-[14px] flex items-center justify-center border border-slate-100 active:scale-95 transition-all"><LogOut className="w-4 h-4" /></button>
+            <button onClick={() => setShowSOS(true)} className="w-10 h-10 bg-red-50 text-red-600 rounded-[14px] flex items-center justify-center border border-red-100 active:scale-95 transition-all shadow-sm shadow-red-100"><PhoneCall className="w-5 h-5" /></button>
           </div>
         </header>
       )}
