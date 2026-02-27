@@ -26,20 +26,3 @@
   border-radius: 10px;
 }
 
-/* Portrait Lock Helper */
-@media screen and (max-width: 480px) and (orientation: landscape) {
-  body::after {
-    content: "Vui lòng xoay dọc điện thoại để có trải nghiệm tốt nhất.";
-    position: fixed;
-    inset: 0;
-    background: #059669;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-    font-weight: bold;
-    text-align: center;
-    padding: 2rem;
-  }
-}
