@@ -10,7 +10,7 @@ import {
   Check, ListChecks
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import Markdown from 'react-markdown';
 import { createClient } from '@supabase/supabase-js';
 
@@ -518,7 +518,10 @@ export default function App() {
         const response = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
           contents: { parts },
-          config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+          config: { 
+            systemInstruction: AI_SYSTEM_INSTRUCTION,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+          }
         });
 
         const modelMsg: ChatMessage = { role: 'model', content: response.text || "Không thể phân tích." };
@@ -547,7 +550,10 @@ export default function App() {
         const response = await ai.models.generateContent({
           model: "gemini-3-flash-preview",
           contents: { parts },
-          config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+          config: { 
+            systemInstruction: AI_SYSTEM_INSTRUCTION,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+          }
         });
 
         setTranslatedText(response.text || "Không thể dịch.");
@@ -580,7 +586,10 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: { parts },
-        config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+        config: { 
+          systemInstruction: AI_SYSTEM_INSTRUCTION,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
       });
 
       const text = response.text || "";
@@ -618,7 +627,10 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
-        config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+        config: { 
+          systemInstruction: AI_SYSTEM_INSTRUCTION,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
       });
       setTranslatedText(response.text || "Không thể dịch.");
     } catch (e) {
@@ -657,7 +669,10 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: fullPrompt,
-        config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+        config: { 
+          systemInstruction: AI_SYSTEM_INSTRUCTION,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
+        }
       });
 
       const modelMsg: ChatMessage = { role: 'model', content: response.text || "Xin lỗi, tôi không thể trả lời." };
@@ -972,6 +987,9 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
             >
               <PhoneCall className="w-5 h-5" /> SOS Khẩn cấp
             </button>
+            <p className="text-[9px] text-slate-400 text-center mt-4 leading-tight">
+              Lưu ý: Thông tin từ AI chỉ mang tính tham khảo, không thay thế chẩn đoán của bác sĩ chuyên môn.
+            </p>
           </div>
         </aside>
       )}
@@ -1331,20 +1349,25 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
       {/* Mobile Bottom Nav */}
       {!isDesktop && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-3 flex items-center justify-between z-50 pb-safe max-w-[540px] mx-auto">
-          {[
-            { id: 'scan', icon: Camera, label: 'Quét' },
-            { id: 'inventory', icon: Package, label: 'Tủ thuốc' },
-            { id: 'groups', icon: Layers, label: 'Gói thuốc' },
-            { id: 'schedule', icon: ListChecks, label: 'Lịch' },
-            { id: 'chat', icon: MessageSquare, label: 'Chat', hideOnWide: true }
-          ].filter(tab => !tab.hideOnWide || !isWide).map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-emerald-600' : 'text-slate-400'}`}>
-              <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'scale-110' : ''}`} />
-              <span className="text-[9px] font-bold uppercase tracking-tighter">{tab.label}</span>
-            </button>
-          ))}
-        </nav>
+        <div className="fixed bottom-0 left-0 right-0 z-50 max-w-[540px] mx-auto">
+          <div className="bg-white/90 backdrop-blur-md px-4 py-1 text-[8px] text-slate-400 text-center border-t border-slate-50">
+            Lưu ý: Thông tin từ AI chỉ mang tính tham khảo, không thay thế bác sĩ chuyên môn.
+          </div>
+          <nav className="bg-white border-t border-slate-100 px-6 py-3 flex items-center justify-between pb-safe">
+            {[
+              { id: 'scan', icon: Camera, label: 'Quét' },
+              { id: 'inventory', icon: Package, label: 'Tủ thuốc' },
+              { id: 'groups', icon: Layers, label: 'Gói thuốc' },
+              { id: 'schedule', icon: ListChecks, label: 'Lịch' },
+              { id: 'chat', icon: MessageSquare, label: 'Chat', hideOnWide: true }
+            ].filter(tab => !tab.hideOnWide || !isWide).map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-emerald-600' : 'text-slate-400'}`}>
+                <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'scale-110' : ''}`} />
+                <span className="text-[9px] font-bold uppercase tracking-tighter">{tab.label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
       )}
 
       {/* Modals */}
