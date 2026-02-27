@@ -204,7 +204,8 @@ export default function App() {
   const [showSOS, setShowSOS] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showManualEntry, setShowManualEntry] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024);
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
+  const [isWide, setIsWide] = useState(window.innerWidth >= 1200);
 
   const [groupForm, setGroupForm] = useState({ name: '', purpose: '' });
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
@@ -406,7 +407,10 @@ export default function App() {
 
   useEffect(() => {
     fetchData();
-    const handleResize = () => setIsDesktop(window.innerWidth >= 1024);
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 768);
+      setIsWide(window.innerWidth >= 1200);
+    };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [fetchData]);
@@ -926,7 +930,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   };
 
   return (
-    <div className={`h-screen bg-slate-50 font-sans text-slate-900 overflow-hidden flex ${isDesktop ? 'flex-row' : 'flex-col max-w-[480px] mx-auto shadow-2xl relative border-x border-slate-200'}`}>
+    <div className={`h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden flex ${isDesktop ? 'flex-row' : 'flex-col max-w-[540px] mx-auto shadow-2xl relative border-x border-slate-200'}`}>
       
       {/* Desktop Sidebar */}
       {isDesktop && (
@@ -943,8 +947,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
               { id: 'inventory', icon: Package, label: 'Tủ thuốc' },
               { id: 'groups', icon: Layers, label: 'Gói thuốc' },
               { id: 'schedule', icon: ListChecks, label: 'Lịch trình' },
-              { id: 'chat', icon: MessageSquare, label: 'Bác sĩ' }
-            ].map(tab => (
+              { id: 'chat', icon: MessageSquare, label: 'Bác sĩ', hideOnWide: true }
+            ].filter(tab => !tab.hideOnWide || !isWide).map(tab => (
               <button 
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
@@ -974,7 +978,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
       {/* Mobile Header */}
       {!isDesktop && (
-        <header className="bg-white/80 backdrop-blur-md px-6 py-4 flex items-center justify-between shadow-sm border-b border-slate-100 shrink-0 z-50 sticky top-0">
+        <header className="bg-white/80 backdrop-blur-md px-6 py-4 flex items-center justify-between shadow-sm border-b border-slate-100 shrink-0 z-50">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 bg-emerald-600 rounded-[14px] flex items-center justify-center text-white shadow-lg shadow-emerald-200">
               <HeartPulse className="w-6 h-6" />
@@ -992,12 +996,12 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       )}
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
-        <main className={`flex-1 overflow-hidden relative ${isDesktop && activeTab === 'chat' ? 'hidden' : ''}`}>
+      <div className={`flex-1 flex overflow-hidden ${!isDesktop ? 'pb-[72px]' : ''}`}>
+        <main className="flex-1 overflow-hidden relative">
           <AnimatePresence mode="wait">
             {activeTab === 'scan' ? (
               <motion.div key="scan" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full flex flex-col p-4 gap-4 overflow-y-auto custom-scrollbar">
-                <div className="flex gap-3">
+                <div className="flex gap-3 shrink-0">
                   {[
                     { id: 'medicine', icon: Pill, label: 'Quét thuốc' },
                     { id: 'symptom', icon: Stethoscope, label: 'Triệu chứng' },
@@ -1055,11 +1059,11 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                 </div>
 
                 {capturedImage && !analysisResult && !isAnalyzing && (
-                  <button onClick={() => analyzeMedicine()} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2"><Search className="w-5 h-5" /> Phân tích ngay</button>
+                  <button onClick={() => analyzeMedicine()} className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2 shrink-0"><Search className="w-5 h-5" /> Phân tích ngay</button>
                 )}
 
                 {isAnalyzing && (
-                  <div className="bg-white p-8 rounded-3xl text-center shadow-sm border border-slate-100"><Loader2 className="w-10 h-10 text-emerald-600 animate-spin mx-auto mb-3" /><p className="font-bold">Đang tra cứu AI...</p></div>
+                  <div className="bg-white p-8 rounded-3xl text-center shadow-sm border border-slate-100 shrink-0"><Loader2 className="w-10 h-10 text-emerald-600 animate-spin mx-auto mb-3" /><p className="font-bold">Đang tra cứu AI...</p></div>
                 )}
 
                 {translatedText && (
@@ -1268,9 +1272,9 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
           </AnimatePresence>
         </main>
 
-        {/* Chat Side-by-Side for Desktop or Chat Tab for Mobile */}
-        {(isDesktop || activeTab === 'chat') && (
-          <aside className={`${isDesktop ? 'w-[400px] border-l border-slate-100' : 'w-full'} h-full flex flex-col bg-white shrink-0`}>
+        {/* Chat Side-by-Side for Wide Screens or Chat Tab for Mobile/Tablet */}
+        {(isWide || activeTab === 'chat') && (
+          <aside className={`${isWide ? 'w-[400px] border-l border-slate-100' : 'w-full'} h-full flex flex-col bg-white shrink-0`}>
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><User className="w-5 h-5" /></div>
@@ -1327,14 +1331,14 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
       {/* Mobile Bottom Nav */}
       {!isDesktop && (
-        <nav className="bg-white border-t border-slate-100 px-6 py-3 flex items-center justify-between shrink-0 z-50 pb-safe">
+        <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-100 px-6 py-3 flex items-center justify-between z-50 pb-safe max-w-[540px] mx-auto">
           {[
             { id: 'scan', icon: Camera, label: 'Quét' },
             { id: 'inventory', icon: Package, label: 'Tủ thuốc' },
             { id: 'groups', icon: Layers, label: 'Gói thuốc' },
             { id: 'schedule', icon: ListChecks, label: 'Lịch' },
-            { id: 'chat', icon: MessageSquare, label: 'Chat' }
-          ].map(tab => (
+            { id: 'chat', icon: MessageSquare, label: 'Chat', hideOnWide: true }
+          ].filter(tab => !tab.hideOnWide || !isWide).map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={`flex flex-col items-center gap-1 transition-all ${activeTab === tab.id ? 'text-emerald-600' : 'text-slate-400'}`}>
               <tab.icon className={`w-5 h-5 ${activeTab === tab.id ? 'scale-110' : ''}`} />
               <span className="text-[9px] font-bold uppercase tracking-tighter">{tab.label}</span>
@@ -1452,7 +1456,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
         .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
-        @media (max-width: 767px) {
+        @media (max-width: 1199px) {
           body { overflow: hidden; position: fixed; width: 100%; height: 100%; }
         }
       `}</style>
