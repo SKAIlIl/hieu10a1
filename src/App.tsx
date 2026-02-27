@@ -7,7 +7,7 @@ import {
   Layers, Save, BookOpen, HeartPulse, MoreVertical, ChevronDown,
   MessageSquare, Send, Paperclip, Mic, MicOff, Image as ImageIcon,
   Stethoscope, AlertCircle, Zap, ZoomIn, ZoomOut, Upload, Folder,
-  Check, ListChecks
+  Check, ListChecks, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI } from "@google/genai";
@@ -36,6 +36,7 @@ interface Medicine {
   category: string;
   is_taken: boolean;
   scanned_at: string;
+  user_id?: string;
 }
 
 interface MedicineGroup {
@@ -45,6 +46,7 @@ interface MedicineGroup {
   ai_schedule: string;
   items: Medicine[];
   created_at: string;
+  user_id?: string;
 }
 
 interface AnalysisResult {
@@ -63,6 +65,7 @@ interface ChatMessage {
   role: 'user' | 'model';
   content: string;
   timestamp?: string;
+  user_id?: string;
 }
 
 interface AppSettings {
@@ -77,6 +80,7 @@ interface AdherenceRecord {
   time_slot: string;
   date: string;
   status: number;
+  user_id?: string;
 }
 
 // --- AI System Instruction ---
@@ -185,6 +189,14 @@ const MedicineCard: React.FC<{
 };
 
 export default function App() {
+  // --- Auth State ---
+  const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoginLoading, setIsLoginLoading] = useState(false);
+
+  // --- App State ---
   const [activeTab, setActiveTab] = useState<'scan' | 'inventory' | 'groups' | 'chat' | 'schedule'>('scan');
   const [inventory, setInventory] = useState<Medicine[]>([]);
   const [groups, setGroups] = useState<MedicineGroup[]>([]);
@@ -238,9 +250,50 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
+  // --- Auth Logic ---
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleAuth = async (e: React.FormEvent, isSignUp: boolean) => {
+    e.preventDefault();
+    if (!supabase) return;
+    if (!email || !password) {
+      showToast("Vui lòng nhập Email và Mật khẩu", "warning");
+      return;
+    }
+    setIsLoginLoading(true);
+    try {
+      const { error } = isSignUp 
+        ? await supabase.auth.signUp({ email, password })
+        : await supabase.auth.signInWithPassword({ email, password });
+      
+      if (error) throw error;
+      if (isSignUp) showToast("Đăng ký thành công! Hãy kiểm tra Email (nếu yêu cầu)", "success");
+      else showToast("Đăng nhập thành công!", "success");
+    } catch (error: any) {
+      showToast(error.message, "error");
+    } finally {
+      setIsLoginLoading(false);
+    }
+  };
+
   // --- API Calls (Supabase) ---
   const fetchData = useCallback(async () => {
-    if (!supabase) return;
+    if (!supabase || !user) return; // Bắt buộc phải có user mới tải dữ liệu
     try {
       const today = new Date().toISOString().split('T')[0];
       
@@ -251,11 +304,11 @@ export default function App() {
         { data: settingsData },
         { data: adherenceData }
       ] = await Promise.all([
-        supabase.from('medicines').select('*').order('scanned_at', { ascending: false }),
-        supabase.from('medicine_groups').select('*, items:medicines(*)'),
-        supabase.from('chat_history').select('*').order('timestamp', { ascending: true }),
-        supabase.from('app_settings').select('*').single(),
-        supabase.from('adherence_records').select('*').eq('date', today)
+        supabase.from('medicines').select('*').eq('user_id', user.id).order('scanned_at', { ascending: false }),
+        supabase.from('medicine_groups').select('*, items:medicines(*)').eq('user_id', user.id),
+        supabase.from('chat_history').select('*').eq('user_id', user.id).order('timestamp', { ascending: true }),
+        supabase.from('app_settings').select('*').eq('user_id', user.id).single(),
+        supabase.from('adherence_records').select('*').eq('user_id', user.id).eq('date', today)
       ]);
 
       if (inv) setInventory(inv);
@@ -267,7 +320,7 @@ export default function App() {
       console.error("Error fetching data:", error);
       showToast("Lỗi đồng bộ dữ liệu", "error");
     }
-  }, [showToast]);
+  }, [user, showToast]);
 
   // --- Camera Logic ---
   const startCamera = useCallback(async () => {
@@ -362,7 +415,6 @@ export default function App() {
             showToast("Vui lòng cấp quyền Microphone để sử dụng tính năng này", "error");
             break;
           case 'no-speech':
-            // Don't show a loud error for no-speech, just a subtle hint
             showToast("Bạn chưa nói gì, hãy thử lại nhé", "warning");
             break;
           case 'network':
@@ -406,14 +458,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchData();
+    if (user) {
+      fetchData();
+    }
     const handleResize = () => {
       setIsDesktop(window.innerWidth >= 768);
       setIsWide(window.innerWidth >= 1200);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [fetchData]);
+  }, [fetchData, user]);
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -423,7 +477,7 @@ export default function App() {
 
   useEffect(() => {
     const currentVideo = videoRef.current;
-    if (activeTab === 'scan' && !capturedImage) {
+    if (user && activeTab === 'scan' && !capturedImage) {
       startCamera();
     }
     return () => {
@@ -432,7 +486,7 @@ export default function App() {
       }
       setIsCameraActive(false);
     };
-  }, [activeTab, capturedImage, facingMode, startCamera]);
+  }, [activeTab, capturedImage, facingMode, startCamera, user]);
 
   const applyCameraConstraints = async (constraints: any) => {
     const stream = videoRef.current?.srcObject as MediaStream;
@@ -524,10 +578,10 @@ export default function App() {
         const modelMsg: ChatMessage = { role: 'model', content: response.text || "Không thể phân tích." };
         setChatHistory(prev => [...prev, { role: 'user', content: "[Ảnh triệu chứng]" }, modelMsg]);
         
-        if (supabase) {
+        if (supabase && user) {
           await supabase.from('chat_history').insert([
-            { role: 'user', content: "[Ảnh triệu chứng]" },
-            modelMsg
+            { role: 'user', content: "[Ảnh triệu chứng]", user_id: user.id },
+            { ...modelMsg, user_id: user.id }
           ]);
         }
         
@@ -610,24 +664,6 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     }
   };
 
-  const translateIngredients = async () => {
-    if (!analysisResult) return;
-    setIsTranslating(true);
-    try {
-      const prompt = `Dịch thành phần hoặc tên thuốc sau sang tiếng Việt thuần túy, dễ hiểu: "${analysisResult.name}". CHỈ trả về bản dịch.`;
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
-      });
-      setTranslatedText(response.text || "Không thể dịch.");
-    } catch (e) {
-      showToast("Lỗi dịch thuật", "error");
-    } finally {
-      setIsTranslating(false);
-    }
-  };
-
   const handleChat = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!ai) {
@@ -647,8 +683,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     setIsSendingChat(true);
 
     try {
-      if (supabase) {
-        await supabase.from('chat_history').insert([newUserMsg]);
+      if (supabase && user) {
+        await supabase.from('chat_history').insert([{ ...newUserMsg, user_id: user.id }]);
       }
 
       const inventoryContext = inventory.map(i => `${i.name}: ${i.usage}`).join('\n');
@@ -663,8 +699,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const modelMsg: ChatMessage = { role: 'model', content: response.text || "Xin lỗi, tôi không thể trả lời." };
       setChatHistory(prev => [...prev, modelMsg]);
       
-      if (supabase) {
-        await supabase.from('chat_history').insert([modelMsg]);
+      if (supabase && user) {
+        await supabase.from('chat_history').insert([{ ...modelMsg, user_id: user.id }]);
       }
     } catch (error) {
       showToast("Lỗi gửi tin nhắn", "error");
@@ -674,8 +710,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   };
 
   const createGroupFromSelection = async () => {
-    if (!ai || !supabase) {
-      showToast("Thiếu cấu hình API", "error");
+    if (!ai || !supabase || !user) {
+      showToast("Thiếu cấu hình API hoặc chưa đăng nhập", "error");
       return;
     }
     if (selectedIds.length === 0 || !groupForm.name) return;
@@ -704,7 +740,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const { data: groupData, error: groupError } = await supabase.from('medicine_groups').insert([{
         name: groupForm.name,
         purpose: groupForm.purpose,
-        ai_schedule: response.text
+        ai_schedule: response.text,
+        user_id: user.id
       }]).select().single();
 
       if (groupError) throw groupError;
@@ -732,7 +769,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   };
 
   const toggleAdherence = async (itemId: number, type: 'medicine' | 'group', timeSlot: string) => {
-    if (!supabase) return;
+    if (!supabase || !user) return;
     const today = new Date().toISOString().split('T')[0];
     const current = adherence.find(a => a.item_id === itemId && a.type === type && a.time_slot === timeSlot && a.date === today);
     const newStatus = current?.status === 1 ? 0 : 1;
@@ -741,7 +778,9 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       if (current) {
         await supabase.from('adherence_records').update({ status: newStatus }).eq('id', current.id);
       } else {
-        await supabase.from('adherence_records').insert([{ item_id: itemId, type, time_slot: timeSlot, date: today, status: newStatus }]);
+        await supabase.from('adherence_records').insert([{ 
+          item_id: itemId, type, time_slot: timeSlot, date: today, status: newStatus, user_id: user.id 
+        }]);
       }
       fetchData();
     } catch (e) {
@@ -773,7 +812,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
   const saveManualEntry = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!supabase) return;
+    if (!supabase || !user) return;
     const formData = new FormData(e.currentTarget);
     const data = {
       name: formData.get('name') as string,
@@ -784,7 +823,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       simple_instructions: formData.get('usage') as string,
       interaction_warning: 'N/A',
       disposal_tip: 'N/A',
-      is_taken: false
+      is_taken: false,
+      user_id: user.id
     };
 
     try {
@@ -801,6 +841,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     return inventory.filter(i => i.name.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [inventory, searchQuery]);
 
+  // --- Screens ---
+
   if (!supabase || !ai) {
     return (
       <div className="h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
@@ -811,16 +853,69 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
         <p className="text-slate-500 max-w-xs mb-8">
           Vui lòng kiểm tra lại <strong>VITE_SUPABASE_URL</strong>, <strong>VITE_SUPABASE_ANON_KEY</strong> và <strong>VITE_GEMINI_API_KEY</strong> trong biến môi trường.
         </p>
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 text-left w-full max-w-sm space-y-2">
-          <div className="flex items-center justify-between text-xs font-bold">
-            <span className="text-slate-400 uppercase">Supabase Status</span>
-            {supabase ? <span className="text-emerald-600">CONNECTED</span> : <span className="text-red-600">MISSING</span>}
+      </div>
+    );
+  }
+
+  if (authLoading) {
+    return <div className="h-screen bg-slate-50 flex items-center justify-center"><Loader2 className="w-10 h-10 animate-spin text-emerald-600" /></div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center mb-6 shadow-xl shadow-emerald-100">
+          <HeartPulse className="w-10 h-10" />
+        </div>
+        <h1 className="text-2xl font-bold text-slate-900 mb-2">MedGuard AI</h1>
+        <p className="text-slate-500 max-w-xs mb-8 text-sm">
+          Hệ thống quản lý tủ thuốc thông minh dành cho gia đình. Vui lòng đăng nhập để tiếp tục.
+        </p>
+        <div className="bg-white p-6 rounded-[32px] shadow-xl border border-slate-100 w-full max-w-sm space-y-4 text-left">
+          <div>
+            <label className="text-xs font-bold text-slate-400 uppercase ml-1">Email</label>
+            <input 
+              type="email" 
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500 mt-1"
+              placeholder="Nhập email của bạn"
+            />
           </div>
-          <div className="flex items-center justify-between text-xs font-bold">
-            <span className="text-slate-400 uppercase">Gemini Status</span>
-            {ai ? <span className="text-emerald-600">CONNECTED</span> : <span className="text-red-600">MISSING</span>}
+          <div>
+            <label className="text-xs font-bold text-slate-400 uppercase ml-1">Mật khẩu</label>
+            <input 
+              type="password" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500 mt-1"
+              placeholder="Ít nhất 6 ký tự"
+            />
+          </div>
+          <div className="flex gap-3 pt-4">
+            <button 
+              onClick={(e) => handleAuth(e, true)}
+              disabled={isLoginLoading}
+              className="flex-1 bg-slate-100 text-slate-700 py-3.5 rounded-xl font-bold hover:bg-slate-200 transition-all text-sm"
+            >
+              Đăng ký
+            </button>
+            <button 
+              onClick={(e) => handleAuth(e, false)}
+              disabled={isLoginLoading}
+              className="flex-[1.5] bg-emerald-600 text-white py-3.5 rounded-xl font-bold shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all flex items-center justify-center text-sm"
+            >
+              {isLoginLoading ? <Loader2 className="w-5 h-5 animate-spin mx-auto" /> : "Đăng nhập"}
+            </button>
           </div>
         </div>
+        <AnimatePresence>
+        {toast && (
+          <motion.div initial={{ opacity: 0, y: 50, x: '-50%' }} animate={{ opacity: 1, y: 0, x: '-50%' }} exit={{ opacity: 0, y: 20, x: '-50%' }} className={`fixed bottom-20 left-1/2 z-[110] px-5 py-3 rounded-xl shadow-2xl font-bold text-white text-xs flex items-center gap-2 ${toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'warning' ? 'bg-amber-500' : 'bg-red-600'}`}>
+            {toast.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
       </div>
     );
   }
@@ -834,14 +929,11 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const usage = item.usage.toLowerCase();
       const name = item.name.toLowerCase();
       
-      // Filter out non-medicines as requested
       if (usage.includes("không phải thuốc") || name.includes("không phải thuốc")) return false;
       if (usage.includes("thực phẩm bổ sung") && !usage.includes("uống")) return false;
 
-      // Check for specific slot mentions
       if (usage.includes(slot.toLowerCase())) return true;
       
-      // Handle frequency
       if (usage.includes("2 lần") || usage.includes("2 chai") || usage.includes("2 viên")) {
         return slot === 'Sáng' || slot === 'Tối';
       }
@@ -852,7 +944,6 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
         return slot === 'Sáng';
       }
       
-      // If no frequency info, show in all slots by default unless it's a "as needed" medicine
       if (usage.includes("khi cần") || usage.includes("nếu đau")) return false;
       
       return true;
@@ -960,6 +1051,9 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
             ))}
           </nav>
           <div className="p-6 border-t border-slate-100 space-y-3">
+            <div className="flex items-center gap-2 px-2 pb-2 text-xs font-bold text-slate-400">
+              <User className="w-4 h-4" /> {user.email?.split('@')[0]}
+            </div>
             <button 
               onClick={() => setShowSettings(true)} 
               className="w-full bg-slate-50 text-slate-600 py-3.5 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-slate-100 transition-all active:scale-[0.98]"
@@ -971,6 +1065,12 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
               className="w-full bg-red-50 text-red-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-red-100 transition-all active:scale-[0.98] shadow-sm"
             >
               <PhoneCall className="w-5 h-5" /> SOS Khẩn cấp
+            </button>
+            <button 
+              onClick={() => supabase?.auth.signOut()} 
+              className="w-full bg-slate-50 text-slate-500 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-200 transition-all"
+            >
+              <LogOut className="w-4 h-4" /> Đăng xuất
             </button>
           </div>
         </aside>
@@ -985,12 +1085,12 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
             </div>
             <div>
               <h1 className="text-base font-bold tracking-tight text-slate-900 leading-none mb-0.5">MedGuard AI</h1>
-              <p className="text-[10px] text-slate-400 font-medium">Trợ lý y tế của bạn</p>
+              <p className="text-[10px] text-slate-400 font-medium">{user.email?.split('@')[0]}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setShowSettings(true)} className="w-10 h-10 bg-slate-50 text-slate-600 rounded-[14px] flex items-center justify-center border border-slate-100 active:scale-95 transition-all"><Settings className="w-5 h-5" /></button>
-            <button onClick={() => setShowSOS(true)} className="w-10 h-10 bg-red-50 text-red-600 rounded-[14px] flex items-center justify-center border border-red-100 active:scale-95 transition-all shadow-sm shadow-red-100"><PhoneCall className="w-5 h-5" /></button>
+            <button onClick={() => supabase?.auth.signOut()} className="w-10 h-10 bg-slate-50 text-slate-500 rounded-[14px] flex items-center justify-center border border-slate-100 active:scale-95 transition-all"><LogOut className="w-4 h-4" /></button>
           </div>
         </header>
       )}
@@ -1160,8 +1260,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                 <div className="pt-2">
                   <button 
                     onClick={async () => { 
-                      if (supabase) {
-                        await supabase.from('medicines').insert([analysisResult]);
+                      if (supabase && user) {
+                        await supabase.from('medicines').insert([{...analysisResult, user_id: user.id}]);
                       }
                       setAnalysisResult(null); 
                       setCapturedImage(null); 
@@ -1233,7 +1333,11 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                           <p className="text-[11px] text-slate-500 truncate">{group.purpose}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button onClick={async (e) => { e.stopPropagation(); await fetch(`/api/groups/${group.id}`, { method: 'DELETE' }); fetchData(); }} className="text-slate-300 hover:text-red-600 p-2">
+                          <button onClick={async (e) => { 
+                            e.stopPropagation(); 
+                            if(supabase) await supabase.from('medicine_groups').delete().eq('id', group.id);
+                            fetchData(); 
+                          }} className="text-slate-300 hover:text-red-600 p-2">
                             <Trash2 className="w-5 h-5" />
                           </button>
                           <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${expandedGroupId === group.id ? 'rotate-180' : ''}`} />
@@ -1280,7 +1384,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                 <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><User className="w-5 h-5" /></div>
                 <h3 className="font-bold text-sm">Bác sĩ MedGuard</h3>
               </div>
-              <button onClick={async () => { await fetch('/api/chat', { method: 'DELETE' }); setChatHistory([]); }} className="text-slate-300"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={async () => { if(supabase && user) await supabase.from('chat_history').delete().eq('user_id', user.id); setChatHistory([]); }} className="text-slate-300"><Trash2 className="w-4 h-4" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50/50">
               {chatHistory.map((msg, idx) => (
@@ -1358,11 +1462,12 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
               </div>
               <form onSubmit={async (e) => {
                 e.preventDefault();
-                if (!supabase) return;
+                if (!supabase || !user) return;
                 const formData = new FormData(e.currentTarget);
                 const data = {
                   emergency_name: formData.get('emergency_name') as string,
                   emergency_phone: formData.get('emergency_phone') as string,
+                  user_id: user.id
                 };
                 await supabase.from('app_settings').upsert([data]);
                 fetchData();
@@ -1373,7 +1478,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                   <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Tên người thân</label>
                   <input 
                     name="emergency_name" 
-                    defaultValue={settings.emergency_name}
+                    defaultValue={settings?.emergency_name || ''}
                     required 
                     className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500" 
                     placeholder="Ví dụ: Con trai"
@@ -1383,7 +1488,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                   <label className="text-[10px] font-bold text-slate-400 uppercase ml-1">Số điện thoại</label>
                   <input 
                     name="emergency_phone" 
-                    defaultValue={settings.emergency_phone}
+                    defaultValue={settings?.emergency_phone || ''}
                     required 
                     className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500" 
                     placeholder="Ví dụ: 0901234567"
@@ -1403,7 +1508,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
               <p className="text-xs text-slate-500 mb-6">Liên hệ ngay nếu bạn cần giúp đỡ.</p>
               <div className="space-y-3">
                 <a href="tel:115" className="flex items-center justify-center w-full bg-red-600 text-white py-4 rounded-2xl font-bold shadow-lg">Gọi Cấp cứu (115)</a>
-                {settings.emergency_phone && <a href={`tel:${settings.emergency_phone}`} className="flex items-center justify-center w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg">Gọi {settings.emergency_name}</a>}
+                {settings?.emergency_phone && <a href={`tel:${settings.emergency_phone}`} className="flex items-center justify-center w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg">Gọi {settings.emergency_name}</a>}
                 <button onClick={() => setShowSOS(false)} className="w-full py-2 text-slate-400 text-sm font-bold">Đóng</button>
               </div>
             </motion.div>
