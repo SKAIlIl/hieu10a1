@@ -7,7 +7,7 @@ import {
   Layers, Save, BookOpen, HeartPulse, MoreVertical, ChevronDown,
   MessageSquare, Send, Paperclip, Mic, MicOff, Image as ImageIcon,
   Stethoscope, AlertCircle, Zap, ZoomIn, ZoomOut, Upload, Folder,
-  Check, ListChecks
+  Check, ListChecks, Copy
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
@@ -102,11 +102,12 @@ const MedicineCard: React.FC<{
   onToggleTaken?: (id: number, status: boolean) => void;
   onDelete?: (id: number) => void;
   onAskAI?: (item: Medicine) => void;
+  onDuplicate?: (item: Medicine) => void;
   compact?: boolean;
   selectable?: boolean;
   selected?: boolean;
   onSelect?: (id: number) => void;
-}> = ({ item, onToggleTaken, onDelete, onAskAI, compact, selectable, selected, onSelect }) => {
+}> = ({ item, onToggleTaken, onDelete, onAskAI, onDuplicate, compact, selectable, selected, onSelect }) => {
   const calculateDaysRemaining = (expiryDate: string) => {
     if (!expiryDate || expiryDate === 'N/A' || expiryDate === 'KHÔNG RÕ') return Infinity;
     const expiry = new Date(expiryDate);
@@ -152,6 +153,11 @@ const MedicineCard: React.FC<{
               {!selectable && onAskAI && (
                 <button onClick={(e) => { e.stopPropagation(); onAskAI(item); }} className="p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
                   <MessageSquare className="w-4 h-4" />
+                </button>
+              )}
+              {!selectable && onDuplicate && (
+                <button onClick={(e) => { e.stopPropagation(); onDuplicate(item); }} title="Nhân bản" className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                  <Copy className="w-4 h-4" />
                 </button>
               )}
               {!selectable && onDelete && (
@@ -206,6 +212,7 @@ export default function App() {
   const [showManualEntry, setShowManualEntry] = useState(false);
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 768);
   const [isWide, setIsWide] = useState(window.innerWidth >= 1200);
+  const [groupedMedicineIds, setGroupedMedicineIds] = useState<Set<number>>(new Set());
 
   const [groupForm, setGroupForm] = useState({ name: '', purpose: '' });
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
@@ -261,11 +268,16 @@ export default function App() {
       if (inv) setInventory(inv);
       if (groupsData) {
         // Flatten the many-to-many structure
+        const ids = new Set<number>();
         const flattenedGroups = groupsData.map((g: any) => ({
           ...g,
-          items: g.items ? g.items.map((gi: any) => gi.medicine).filter(Boolean) : []
+          items: g.items ? g.items.map((gi: any) => {
+            if (gi.medicine) ids.add(gi.medicine.id);
+            return gi.medicine;
+          }).filter(Boolean) : []
         }));
         setGroups(flattenedGroups);
+        setGroupedMedicineIds(ids);
       }
       if (chat) setChatHistory(chat);
       if (settingsData) setSettings(settingsData);
@@ -786,6 +798,23 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     }
   };
 
+  const duplicateMedicine = async (item: Medicine) => {
+    if (!supabase) return;
+    try {
+      const { id, scanned_at, ...rest } = item;
+      const { error } = await supabase.from('medicines').insert([{
+        ...rest,
+        name: `${item.name} (Bản sao)`,
+        scanned_at: new Date().toISOString()
+      }]);
+      if (error) throw error;
+      showToast("Đã nhân bản thuốc");
+      fetchData();
+    } catch (e) {
+      showToast("Lỗi khi nhân bản", "error");
+    }
+  };
+
   const deleteItem = async (id: number) => {
     if (!supabase) return;
     try {
@@ -836,8 +865,15 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   };
 
   const filteredInventory = useMemo(() => {
-    return inventory.filter(i => i.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [inventory, searchQuery]);
+    return inventory.filter(item => {
+      const isGrouped = groupedMedicineIds.has(item.id);
+      if (isGrouped) return false;
+      
+      const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                           item.category.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesSearch;
+    });
+  }, [inventory, searchQuery, groupedMedicineIds]);
 
   if (!supabase || !ai) {
     return (
@@ -896,9 +932,42 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       return true;
     };
 
+    const getGroupItemsForSlot = (group: MedicineGroup, slot: string) => {
+      const schedule = group.ai_schedule;
+      const slots = ['Sáng', 'Trưa', 'Chiều', 'Tối'];
+      const currentSlotIndex = slots.indexOf(slot);
+      if (currentSlotIndex === -1) return group.items;
+
+      // Find the start of the current slot section
+      const slotRegex = new RegExp(`(?:^|\\n)(?:#+|\\*\\*|__)?\\s*${slot}`, 'i');
+      const match = schedule.match(slotRegex);
+      if (!match) return [];
+
+      // Find the start of the next slot section to define the boundary
+      let nextSlotStart = schedule.length;
+      for (let i = currentSlotIndex + 1; i < slots.length; i++) {
+        const nextSlotRegex = new RegExp(`(?:^|\\n)(?:#+|\\*\\*|__)?\\s*${slots[i]}`, 'i');
+        const nextMatch = schedule.match(nextSlotRegex);
+        if (nextMatch && nextMatch.index! > match.index!) {
+          nextSlotStart = nextMatch.index!;
+          break;
+        }
+      }
+
+      const sectionText = schedule.substring(match.index!, nextSlotStart).toLowerCase();
+      
+      // Filter items that appear in this section
+      return group.items.filter(item => {
+        const itemName = item.name.toLowerCase();
+        // Check if item name or part of it exists in the section text
+        return sectionText.includes(itemName) || 
+               (itemName.length > 5 && sectionText.includes(itemName.substring(0, 5)));
+      });
+    };
+
     const shouldGroupShowInSlot = (group: MedicineGroup, slot: string) => {
-      const schedule = group.ai_schedule.toLowerCase();
-      return schedule.includes(slot.toLowerCase());
+      const itemsForSlot = getGroupItemsForSlot(group, slot);
+      return itemsForSlot.length > 0;
     };
 
     return (
@@ -939,26 +1008,29 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                     </button>
                   </div>
                 ))}
-                {slotGroups.map(group => (
-                  <div key={group.id} className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
-                    <div className="flex-1 min-w-0 pr-4">
-                      <h4 className="font-bold text-sm text-emerald-900">{group.name}</h4>
-                      <p className="text-[10px] text-emerald-700 font-medium mt-0.5">
-                        {group.items.map(i => i.name).join(', ')}
-                      </p>
+                {slotGroups.map(group => {
+                  const itemsForSlot = getGroupItemsForSlot(group, slot);
+                  return (
+                    <div key={group.id} className="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
+                      <div className="flex-1 min-w-0 pr-4">
+                        <h4 className="font-bold text-sm text-emerald-900">{group.name}</h4>
+                        <p className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                          {itemsForSlot.map(i => i.name).join(', ')}
+                        </p>
+                      </div>
+                      <button 
+                        onClick={() => toggleAdherence(group.id, 'group', slot)}
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                          adherence.find(a => a.item_id === group.id && a.type === 'group' && a.time_slot === slot && a.date === today)?.status === 1
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-white text-emerald-300'
+                        }`}
+                      >
+                        <Check className="w-6 h-6" />
+                      </button>
                     </div>
-                    <button 
-                      onClick={() => toggleAdherence(group.id, 'group', slot)}
-                      className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-                        adherence.find(a => a.item_id === group.id && a.type === 'group' && a.time_slot === slot && a.date === today)?.status === 1
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-white text-emerald-300'
-                      }`}
-                    >
-                      <Check className="w-6 h-6" />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
@@ -1246,6 +1318,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                         onToggleTaken={toggleTaken} 
                         onDelete={deleteItem} 
                         onAskAI={(med) => { setSelectedMedicineForChat(med); setActiveTab('chat'); }}
+                        onDuplicate={duplicateMedicine}
                         selectable={selectionMode}
                         selected={selectedIds.includes(item.id)}
                         onSelect={(id) => {
@@ -1278,7 +1351,9 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                         </div>
                         <div className="flex-1 min-w-0">
                           <h3 className="font-bold text-slate-900 truncate">{group.name}</h3>
-                          <p className="text-[11px] text-slate-500 truncate">{group.purpose}</p>
+                          <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-tight mt-0.5">
+                            {group.items.map(i => i.name).join(', ')}
+                          </p>
                         </div>
                         <div className="flex items-center gap-2">
                           <button onClick={async (e) => { 
@@ -1304,9 +1379,24 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                             exit={{ height: 0, opacity: 0 }}
                             className="overflow-hidden"
                           >
-                            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 mt-2">
-                              <div className="text-[11px] leading-relaxed prose prose-sm max-w-none">
-                                <Markdown>{group.ai_schedule}</Markdown>
+                            <div className="space-y-4 pt-4">
+                              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                                <h4 className="text-[10px] font-bold text-slate-400 uppercase mb-2">Lịch trình AI</h4>
+                                <div className="text-[11px] leading-relaxed prose prose-sm max-w-none">
+                                  <Markdown>{group.ai_schedule}</Markdown>
+                                </div>
+                              </div>
+                              
+                              <div className="space-y-3">
+                                <h4 className="text-[10px] font-bold text-slate-400 uppercase ml-1">Danh sách thuốc trong gói</h4>
+                                {group.items.map(med => (
+                                  <MedicineCard 
+                                    key={med.id} 
+                                    item={med} 
+                                    compact 
+                                    onAskAI={(m) => { setSelectedMedicineForChat(m); setActiveTab('chat'); }}
+                                  />
+                                ))}
                               </div>
                             </div>
                           </motion.div>
