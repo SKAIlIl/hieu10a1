@@ -913,15 +913,47 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   // --- Render Helpers ---
   const UserIdOverlay = () => {
     const [tempId, setTempId] = useState('');
+    const [isChecking, setIsChecking] = useState(false);
+    const [idExists, setIdExists] = useState(false);
     
-    const handleSave = () => {
+    const handleCheck = async () => {
       if (!tempId.trim()) {
         showToast("Vui lòng nhập mã định danh", "warning");
         return;
       }
       const cleanId = tempId.trim().toLowerCase();
-      localStorage.setItem('medguard_user_id', cleanId);
-      setUserId(cleanId);
+      
+      if (!supabase) {
+        saveId(cleanId);
+        return;
+      }
+
+      setIsChecking(true);
+      try {
+        // Kiểm tra xem mã này đã có dữ liệu trong bảng medicines chưa
+        const { count, error } = await supabase
+          .from('medicines')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', cleanId);
+
+        if (error) throw error;
+
+        if (count && count > 0) {
+          setIdExists(true);
+        } else {
+          saveId(cleanId);
+        }
+      } catch (err) {
+        console.error("Check ID error:", err);
+        saveId(cleanId); // Fallback
+      } finally {
+        setIsChecking(false);
+      }
+    };
+
+    const saveId = (id: string) => {
+      localStorage.setItem('medguard_user_id', id);
+      setUserId(id);
       showToast("Đã thiết lập không gian riêng tư");
     };
 
@@ -933,34 +965,62 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
           className="bg-white rounded-[32px] p-8 w-full max-w-md shadow-2xl space-y-6"
         >
           <div className="text-center space-y-2">
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <ShieldAlert className="w-8 h-8" />
+            <div className={`w-16 h-16 ${idExists ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'} rounded-2xl flex items-center justify-center mx-auto mb-4 transition-colors`}>
+              {idExists ? <AlertTriangle className="w-8 h-8" /> : <ShieldAlert className="w-8 h-8" />}
             </div>
-            <h2 className="text-2xl font-bold text-slate-900">Không gian riêng tư</h2>
+            <h2 className="text-2xl font-bold text-slate-900">
+              {idExists ? 'Mã đã tồn tại!' : 'Không gian riêng tư'}
+            </h2>
             <p className="text-sm text-slate-500 leading-relaxed">
-              Nhập một mã định danh (ví dụ: số điện thoại hoặc tên của bạn) để tạo tủ thuốc riêng. Dữ liệu của bạn sẽ được bảo mật và tách biệt.
+              {idExists 
+                ? 'Mã định danh này đã được sử dụng. Để tránh lộ thông tin y tế, vui lòng chọn một mã khác nếu đây không phải là bạn.' 
+                : 'Nhập một mã định danh (ví dụ: số điện thoại) để tạo tủ thuốc riêng. Dữ liệu của bạn sẽ được bảo mật và tách biệt.'}
             </p>
           </div>
 
           <div className="space-y-4">
-            <input 
-              type="text" 
-              placeholder="Nhập mã định danh của bạn..." 
-              value={tempId}
-              onChange={(e) => setTempId(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSave()}
-              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none"
-            />
-            <button 
-              onClick={handleSave}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-2xl font-bold shadow-xl shadow-emerald-200 transition-all active:scale-[0.98]"
-            >
-              Bắt đầu sử dụng
-            </button>
+            {!idExists ? (
+              <>
+                <input 
+                  type="text" 
+                  placeholder="Nhập mã định danh của bạn..." 
+                  value={tempId}
+                  onChange={(e) => setTempId(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCheck()}
+                  disabled={isChecking}
+                  className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none disabled:opacity-50"
+                />
+                <button 
+                  onClick={handleCheck}
+                  disabled={isChecking}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-2xl font-bold shadow-xl shadow-emerald-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  {isChecking ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Bắt đầu sử dụng'}
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={() => {
+                    setIdExists(false);
+                    setTempId('');
+                  }}
+                  className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg"
+                >
+                  Tôi muốn nhập mã khác
+                </button>
+                <button 
+                  onClick={() => saveId(tempId.trim().toLowerCase())}
+                  className="w-full bg-slate-100 text-slate-600 py-3 rounded-2xl font-bold text-xs"
+                >
+                  Đây là tôi, hãy tiếp tục
+                </button>
+              </div>
+            )}
           </div>
           
           <p className="text-[10px] text-center text-slate-400 uppercase font-bold tracking-widest">
-            Powered by Supabase RLS Technology
+            Bảo mật bởi Supabase RLS
           </p>
         </motion.div>
       </div>
