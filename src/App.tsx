@@ -191,6 +191,7 @@ const MedicineCard: React.FC<{
 };
 
 export default function App() {
+  const [userId, setUserId] = useState<string | null>(localStorage.getItem('medguard_user_id'));
   const [activeTab, setActiveTab] = useState<'scan' | 'inventory' | 'groups' | 'chat' | 'schedule'>('scan');
   const [inventory, setInventory] = useState<Medicine[]>([]);
   const [groups, setGroups] = useState<MedicineGroup[]>([]);
@@ -247,7 +248,7 @@ export default function App() {
 
   // --- API Calls (Supabase) ---
   const fetchData = useCallback(async () => {
-    if (!supabase) return;
+    if (!supabase || !userId) return;
     try {
       const today = new Date().toISOString().split('T')[0];
       
@@ -258,11 +259,11 @@ export default function App() {
         { data: settingsData },
         { data: adherenceData }
       ] = await Promise.all([
-        supabase.from('medicines').select('*').order('scanned_at', { ascending: false }),
-        supabase.from('medicine_groups').select('*, items:group_items(medicine:medicines(*))'),
-        supabase.from('chat_history').select('*').order('timestamp', { ascending: true }),
-        supabase.from('app_settings').select('*').single(),
-        supabase.from('adherence_records').select('*').eq('date', today)
+        supabase.from('medicines').select('*').eq('user_id', userId).order('scanned_at', { ascending: false }),
+        supabase.from('medicine_groups').select('*, items:group_items(medicine:medicines(*))').eq('user_id', userId),
+        supabase.from('chat_history').select('*').eq('user_id', userId).order('timestamp', { ascending: true }),
+        supabase.from('app_settings').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('adherence_records').select('*').eq('user_id', userId).eq('date', today)
       ]);
 
       if (inv) setInventory(inv);
@@ -556,10 +557,10 @@ export default function App() {
         const modelMsg: ChatMessage = { role: 'model', content: response.text || "Không thể phân tích." };
         setChatHistory(prev => [...prev, { role: 'user', content: "[Ảnh triệu chứng]" }, modelMsg]);
         
-        if (supabase) {
+        if (supabase && userId) {
           await supabase.from('chat_history').insert([
-            { role: 'user', content: "[Ảnh triệu chứng]" },
-            modelMsg
+            { role: 'user', content: "[Ảnh triệu chứng]", user_id: userId },
+            { ...modelMsg, user_id: userId }
           ]);
         }
         
@@ -688,8 +689,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     setIsSendingChat(true);
 
     try {
-      if (supabase) {
-        await supabase.from('chat_history').insert([newUserMsg]);
+      if (supabase && userId) {
+        await supabase.from('chat_history').insert([{ ...newUserMsg, user_id: userId }]);
       }
 
       const inventoryContext = inventory.map(i => `${i.name}: ${i.usage}`).join('\n');
@@ -707,8 +708,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const modelMsg: ChatMessage = { role: 'model', content: response.text || "Xin lỗi, tôi không thể trả lời." };
       setChatHistory(prev => [...prev, modelMsg]);
       
-      if (supabase) {
-        await supabase.from('chat_history').insert([modelMsg]);
+      if (supabase && userId) {
+        await supabase.from('chat_history').insert([{ ...modelMsg, user_id: userId }]);
       }
     } catch (error) {
       handleAIError(error);
@@ -753,7 +754,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const { data: groupData, error: groupError } = await supabase.from('medicine_groups').insert([{
         name: groupForm.name,
         purpose: groupForm.purpose || "",
-        ai_schedule: response.text
+        ai_schedule: response.text,
+        user_id: userId
       }]).select().single();
 
       if (groupError) throw groupError;
@@ -790,7 +792,14 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       if (current) {
         await supabase.from('adherence_records').update({ status: newStatus }).eq('id', current.id);
       } else {
-        await supabase.from('adherence_records').insert([{ item_id: itemId, type, time_slot: timeSlot, date: today, status: newStatus }]);
+        await supabase.from('adherence_records').insert([{ 
+          item_id: itemId, 
+          type, 
+          time_slot: timeSlot, 
+          date: today, 
+          status: newStatus,
+          user_id: userId
+        }]);
       }
       fetchData();
     } catch (e) {
@@ -805,7 +814,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const { error } = await supabase.from('medicines').insert([{
         ...rest,
         name: `${item.name} (Bản sao)`,
-        scanned_at: new Date().toISOString()
+        scanned_at: new Date().toISOString(),
+        user_id: userId
       }]);
       if (error) throw error;
       showToast("Đã nhân bản thuốc");
@@ -851,7 +861,8 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       simple_instructions: formData.get('usage') as string,
       interaction_warning: 'N/A',
       disposal_tip: 'N/A',
-      is_taken: false
+      is_taken: false,
+      user_id: userId
     };
 
     try {
@@ -900,6 +911,62 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
   }
 
   // --- Render Helpers ---
+  const UserIdOverlay = () => {
+    const [tempId, setTempId] = useState('');
+    
+    const handleSave = () => {
+      if (!tempId.trim()) {
+        showToast("Vui lòng nhập mã định danh", "warning");
+        return;
+      }
+      const cleanId = tempId.trim().toLowerCase();
+      localStorage.setItem('medguard_user_id', cleanId);
+      setUserId(cleanId);
+      showToast("Đã thiết lập không gian riêng tư");
+    };
+
+    return (
+      <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-6">
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="bg-white rounded-[32px] p-8 w-full max-w-md shadow-2xl space-y-6"
+        >
+          <div className="text-center space-y-2">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900">Không gian riêng tư</h2>
+            <p className="text-sm text-slate-500 leading-relaxed">
+              Nhập một mã định danh (ví dụ: số điện thoại hoặc tên của bạn) để tạo tủ thuốc riêng. Dữ liệu của bạn sẽ được bảo mật và tách biệt.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <input 
+              type="text" 
+              placeholder="Nhập mã định danh của bạn..." 
+              value={tempId}
+              onChange={(e) => setTempId(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+              className="w-full bg-slate-50 border-2 border-slate-100 rounded-2xl px-5 py-4 text-lg font-bold focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none"
+            />
+            <button 
+              onClick={handleSave}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-4 rounded-2xl font-bold shadow-xl shadow-emerald-200 transition-all active:scale-[0.98]"
+            >
+              Bắt đầu sử dụng
+            </button>
+          </div>
+          
+          <p className="text-[10px] text-center text-slate-400 uppercase font-bold tracking-widest">
+            Powered by Supabase RLS Technology
+          </p>
+        </motion.div>
+      </div>
+    );
+  };
+
   const renderSchedule = () => {
     const slots = ['Sáng', 'Trưa', 'Chiều', 'Tối'];
     const today = new Date().toISOString().split('T')[0];
@@ -1041,6 +1108,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
 
   return (
     <div className={`h-[100dvh] bg-slate-50 font-sans text-slate-900 overflow-hidden flex ${isDesktop ? 'flex-row' : 'flex-col max-w-[540px] mx-auto shadow-2xl relative border-x border-slate-200'}`}>
+      {!userId && <UserIdOverlay />}
       
       {/* Desktop Sidebar */}
       {isDesktop && (
@@ -1273,8 +1341,11 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                 <div className="pt-2">
                   <button 
                     onClick={async () => { 
-                      if (supabase) {
-                        await supabase.from('medicines').insert([analysisResult]);
+                      if (supabase && userId) {
+                        await supabase.from('medicines').insert([{
+                          ...analysisResult,
+                          user_id: userId
+                        }]);
                       }
                       setAnalysisResult(null); 
                       setCapturedImage(null); 
@@ -1552,6 +1623,18 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                   />
                 </div>
                 <button type="submit" className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold shadow-lg mt-2">Lưu cài đặt</button>
+                <div className="pt-4 border-t border-slate-100">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      localStorage.removeItem('medguard_user_id');
+                      window.location.reload();
+                    }}
+                    className="w-full bg-red-50 text-red-600 py-3 rounded-2xl font-bold text-xs"
+                  >
+                    Đăng xuất (Xóa mã định danh)
+                  </button>
+                </div>
               </form>
             </motion.div>
           </motion.div>
