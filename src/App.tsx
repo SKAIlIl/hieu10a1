@@ -491,6 +491,16 @@ export default function App() {
 
   // --- AI Logic ---
 
+  const handleAIError = (error: any) => {
+    console.error("AI Error:", error);
+    const errorCode = error?.status || error?.code || "Unknown";
+    if (errorCode === 429 || (error?.message && error.message.includes("429"))) {
+      showToast("AI đang quá tải (429). Vui lòng đợi 1-2 phút và thử lại.", "warning");
+    } else {
+      showToast(`Lỗi AI: ${errorCode}. Vui lòng thử lại sau.`, "error");
+    }
+  };
+
   const analyzeMedicine = async (customName?: string, editedText?: string) => {
     if (!ai) {
       showToast("Thiếu Gemini API Key", "error");
@@ -613,7 +623,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
         });
       }
     } catch (error) {
-      showToast("Lỗi phân tích AI", "error");
+      handleAIError(error);
     } finally {
       setIsAnalyzing(false);
     }
@@ -634,7 +644,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       });
       setTranslatedText(response.text || "Không thể dịch.");
     } catch (e) {
-      showToast("Lỗi dịch thuật", "error");
+      handleAIError(e);
     } finally {
       setIsTranslating(false);
     }
@@ -682,7 +692,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
         await supabase.from('chat_history').insert([modelMsg]);
       }
     } catch (error) {
-      showToast("Lỗi gửi tin nhắn", "error");
+      handleAIError(error);
     } finally {
       setIsSendingChat(false);
     }
@@ -739,8 +749,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       fetchData();
       setActiveTab('groups');
     } catch (error) {
-      console.error(error);
-      showToast("Lỗi tạo gói", "error");
+      handleAIError(error);
     } finally {
       setIsAnalyzingGroup(false);
     }
@@ -768,6 +777,7 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
     if (!supabase) return;
     try {
       await supabase.from('medicines').delete().eq('id', id);
+      await supabase.from('adherence_records').delete().eq('item_id', id).eq('type', 'medicine');
       setInventory(inventory.filter(i => i.id !== id));
       showToast("Đã xóa thuốc");
     } catch (e) {
@@ -1251,7 +1261,15 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                           <p className="text-[11px] text-slate-500 truncate">{group.purpose}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button onClick={async (e) => { e.stopPropagation(); await fetch(`/api/groups/${group.id}`, { method: 'DELETE' }); fetchData(); }} className="text-slate-300 hover:text-red-600 p-2">
+                          <button onClick={async (e) => { 
+                            e.stopPropagation(); 
+                            if (supabase) {
+                              await supabase.from('medicine_groups').delete().eq('id', group.id);
+                              await supabase.from('adherence_records').delete().eq('item_id', group.id).eq('type', 'group');
+                              fetchData();
+                              showToast("Đã xóa gói thuốc");
+                            }
+                          }} className="text-slate-300 hover:text-red-600 p-2">
                             <Trash2 className="w-5 h-5" />
                           </button>
                           <ChevronDown className={`w-5 h-5 text-slate-400 transition-transform ${expandedGroupId === group.id ? 'rotate-180' : ''}`} />
@@ -1298,7 +1316,18 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                 <div className="w-8 h-8 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center"><User className="w-5 h-5" /></div>
                 <h3 className="font-bold text-sm">Bác sĩ MedGuard</h3>
               </div>
-              <button onClick={async () => { await fetch('/api/chat', { method: 'DELETE' }); setChatHistory([]); }} className="text-slate-300"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={async () => { 
+                if (supabase) {
+                  const { error } = await supabase.from('chat_history').delete().gt('id', 0);
+                  if (error) {
+                    console.error("Delete error:", error);
+                    showToast("Lỗi khi xóa lịch sử", "error");
+                  } else {
+                    setChatHistory([]); 
+                    showToast("Đã xóa lịch sử chat");
+                  }
+                }
+              }} className="text-slate-300 hover:text-red-600 p-2"><Trash2 className="w-4 h-4" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-slate-50/50">
               {chatHistory.map((msg, idx) => (
