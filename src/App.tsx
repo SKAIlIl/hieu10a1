@@ -252,14 +252,21 @@ export default function App() {
         { data: adherenceData }
       ] = await Promise.all([
         supabase.from('medicines').select('*').order('scanned_at', { ascending: false }),
-        supabase.from('medicine_groups').select('*, items:medicines(*)'),
+        supabase.from('medicine_groups').select('*, items:group_items(medicine:medicines(*))'),
         supabase.from('chat_history').select('*').order('timestamp', { ascending: true }),
         supabase.from('app_settings').select('*').single(),
         supabase.from('adherence_records').select('*').eq('date', today)
       ]);
 
       if (inv) setInventory(inv);
-      if (groupsData) setGroups(groupsData);
+      if (groupsData) {
+        // Flatten the many-to-many structure
+        const flattenedGroups = groupsData.map((g: any) => ({
+          ...g,
+          items: g.items ? g.items.map((gi: any) => gi.medicine).filter(Boolean) : []
+        }));
+        setGroups(flattenedGroups);
+      }
       if (chat) setChatHistory(chat);
       if (settingsData) setSettings(settingsData);
       if (adherenceData) setAdherence(adherenceData);
@@ -723,16 +730,22 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: prompt,
-        config: { systemInstruction: AI_SYSTEM_INSTRUCTION }
+        config: { 
+          systemInstruction: AI_SYSTEM_INSTRUCTION,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
+        }
       });
+
+      if (!response.text) throw new Error("AI không trả về kết quả lập lịch.");
 
       const { data: groupData, error: groupError } = await supabase.from('medicine_groups').insert([{
         name: groupForm.name,
-        purpose: groupForm.purpose,
+        purpose: groupForm.purpose || "",
         ai_schedule: response.text
       }]).select().single();
 
       if (groupError) throw groupError;
+      if (!groupData) throw new Error("Không thể tạo dữ liệu gói thuốc.");
 
       const groupItems = selectedIds.map(id => ({
         group_id: groupData.id,
@@ -1217,7 +1230,14 @@ Tên thuốc | Hướng dẫn ngắn gọn | Cảnh báo nguy cơ & Tương tác
                   </button>
                   <button onClick={() => setShowManualEntry(true)} className="bg-emerald-600 text-white p-3 rounded-xl shadow-lg"><Plus className="w-5 h-5" /></button>
                 </div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className="flex-1 overflow-y-auto custom-scrollbar relative">
+                  {selectionMode && selectedIds.length === 0 && (
+                    <div className="absolute inset-x-0 top-4 z-10 flex justify-center">
+                      <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-full text-[10px] font-bold border border-emerald-100 shadow-sm animate-bounce">
+                        Chạm vào các loại thuốc để chọn
+                      </div>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pb-20">
                     {filteredInventory.map(item => (
                       <MedicineCard 
